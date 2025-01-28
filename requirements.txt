@@ -1,1 +1,8 @@
-
+streamlit
+pandas
+google-api-python-client
+google-auth
+python-dotenv
+PyPDF2
+transformers
+requests
