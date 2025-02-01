@@ -1,120 +1,136 @@
-import os
 import streamlit as st
 import pandas as pd
-from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
-from dotenv import load_dotenv
-import PyPDF2
+import json
+import requests
+import fitz  # PyMuPDF
+from pdfminer.high_level import extract_text
 from transformers import pipeline
-import requests  # For making HTTP requests
+from openai import OpenAI
 
-# Load environment variables
-load_dotenv()
-
-# Google Sheets API setup
-SERVICE_ACCOUNT_FILE = os.getenv("path_to_your_service_account_file.json")  # Path to your service account JSON file from environment variable
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-credentials = Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES
+# Initialize the Streamlit app with custom page configuration
+st.set_page_config(
+  page_title="Advanced AI-Driven Legal Document Summarization and Risk Assessment",
+  layout="wide"
 )
-sheets_service = build("sheets", "v4", credentials=credentials)
 
-# Email setup (if using an email service)
-EMAIL_API_URL = os.getenv("EMAIL_API_URL")  # Email service API URL from environment variables
-EMAIL_API_KEY = os.getenv("EMAIL_API_KEY")  # Email service API key from environment variables
+# Title and description of the application
+st.title("Advanced AI-Driven Legal Document Summarization and Risk Assessment")
+st.write("""
+This system provides:
+- Contextual summaries of legal documents.
+- Identification of potential risks through clause cross-referencing.
+- Real-time regulatory updates integration.
+- Seamless integration with Google Sheets and email alerts for efficient tracking.                                    
+""")
 
-def main():
-    st.title("📄 Legal Assistance Chat")
-
-    # File uploader for PDF
-    uploaded_file = st.file_uploader("Upload Legal Doc", type=["pdf"])
-
-    if uploaded_file:
-        pdf_text = extract_text_from_pdf(uploaded_file)
-        st.success("PDF content successfully uploaded and processed!")
-
-        summary, risks_df = perform_analysis(pdf_text)
-
-        # Create a DataFrame for results
-        data = {
-            "Section": ["Summary", "Risk Assessment"],
-            "Details": [summary, risks_df.to_dict(orient='records')]
-        }
-        df = pd.DataFrame(data)
-        st.write("### Processed Data", df)
-
-        spreadsheet_id = upload_to_google_sheets(df)
-
-        # Generate Google Sheets link
-        sheets_link = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
-        st.success(f"Data successfully uploaded to Google Sheets: [Open Sheet]({sheets_link})")
-
-        send_email_notification(sheets_link)
-
+# Function to extract text from PDFs
 def extract_text_from_pdf(uploaded_file):
-    """Extract text from the uploaded PDF file."""
-    pdf_reader = PyPDF2.PdfReader(uploaded_file)
-    return "".join([page.extract_text() for page in pdf_reader.pages])
+    """Extract text from a PDF file using PyMuPDF or pdfminer."""
+    try:
+        file_bytes = uploaded_file.read()
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        text = "\n".join([page.get_text() for page in doc])
+        if text.strip():
+            return text
+        return extract_text(uploaded_file)
+    except Exception as e:
+        return f"Error extracting text: {e}"
 
-def perform_analysis(pdf_text):
-    """Perform summarization and risk assessment on the PDF text."""
-    summarization_pipeline = pipeline("summarization")
-    summary = summarization_pipeline(pdf_text, max_length=100, min_length=30, do_sample=False)[0]['summary_text']
+# 1. Document Parsing and Contextual Summarization Engine
+def summarize_document(content):
+    """
+    Summarizes a given text content using a pre-trained summarization model.
+    """
+    summarizer = pipeline("summarization")
+    summary = summarizer(content, max_length=200, min_length=50, do_sample=False)
+    return summary[0]['summary_text']
+
+# Upload and display a legal document
+uploaded_file = st.file_uploader("Upload Legal Document", type=["txt", "pdf"])
+if uploaded_file:
+    if uploaded_file.type == "application/pdf":
+        content = extract_text_from_pdf(uploaded_file)
+    else:
+        content = uploaded_file.read().decode("utf-8")
     
-    # Load risk analysis DataFrame from the Jupyter notebook file
-    risks_df = pd.read_json('Risk assessment.ipynb') 
+    st.subheader("Uploaded Document")
+    st.write(content)
+    
+    # Generate and display summary
+    if st.button("Generate Summary"):
+        summary = summarize_document(content)
+        st.subheader("Document Summary")
+        st.write(summary)
 
-    return summary, risks_df
+# 2. Risk Detection and Recommendation System
+def detect_risks(content):
+    """
+    Detects potential risks in the given text content using a text classification model.
+    """
+    risk_model = pipeline("text-classification", model="distilbert-base-uncased")
+    risks = risk_model(content)
+    return risks
 
-def upload_to_google_sheets(df):
-    """Upload the DataFrame to Google Sheets and return the spreadsheet ID."""
-    spreadsheet_body = {
-        "properties": {"title": "Legal Document Analysis"}
+# Detect risks in uploaded content
+if uploaded_file:
+    if st.button("Identify Risks"):
+        risks = detect_risks(content)
+        st.subheader("Identified Risks")
+        st.write(risks)
+
+# 3. Continuous Regulatory Update Tracker
+def fetch_regulatory_updates():
+    """Fetches real-time regulatory updates (placeholder implementation)."""
+    updates = [
+        "New GDPR guidelines released.",
+        "Updated compliance requirements for HIPAA."
+    ]
+    return updates
+
+# Display regulatory updates in the sidebar
+if st.checkbox("Show Regulatory Updates"):
+    updates = fetch_regulatory_updates()
+    st.subheader("Regulatory Updates")
+    for update in updates:
+        st.write(f"- {update}")
+
+# 4. Platform Integration and Interactive Dashboard
+def integrate_with_google_sheets(sheet_id, data, access_token):
+    """
+    Appends data into a Google Sheet via API.
+    """
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/Sheet1!A1:append?valueInputOption=RAW"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
     }
-    spreadsheet = sheets_service.spreadsheets().create(
-        body=spreadsheet_body, fields="spreadsheetId"
-    ).execute()
-    spreadsheet_id = spreadsheet.get("spreadsheetId")
+    payload = {"values": data}  # Must be a list of lists
+    response = requests.post(url, headers=headers, json=payload)
+    return response.status_code
 
-    # Write DataFrame to Google Sheets
-    sheet_values = [df.columns.values.tolist()] + df.values.tolist()
-    sheets_service.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id,
-        range="Sheet1",
-        valueInputOption="RAW",
-        body={"values": sheet_values},
-    ).execute()
+def send_email_alert(to_email, subject, body):
+    """Sends email alerts via an external email API."""
+    email_api_url = "https://api.mailjet.com/v3.1/send"
+    payload = {
+        "to": to_email,
+        "subject": subject,
+        "body": body
+    }
+    response = requests.post(email_api_url, json=payload)
+    return response.status_code
 
-    return spreadsheet_id
+# Sidebar options for integrations
+st.sidebar.header("Integration Options")
+sheet_id = st.sidebar.text_input("Google Sheet ID")
+access_token = st.sidebar.text_input("Google OAuth Token", type="password")
+email = st.sidebar.text_input("Alert Email Address")
 
-def send_email_notification(sheets_link):
-    """Send an email notification with the link to the Google Sheets using an email service."""
-    recipient_email = st.text_input("Enter recipient email for notification:", "")
-    
-    if st.button("Send Email Notification"):
-        try:
-            # Prepare email data
-            email_data = {
-                "to": recipient_email,
-                "subject": "Legal Document Analysis Report",
-                "body": f"Hello,\n\nThe legal document analysis report has been processed. You can view the details here: {sheets_link}\n\nBest regards,\nLegal Assistance Team"
-            }
+if st.sidebar.button("Test Integrations"):
+    if sheet_id and access_token:
+        sheet_status = integrate_with_google_sheets(sheet_id, [["Test Data", "More Data"]], access_token)
+        st.sidebar.write("Google Sheets Integration: Success" if sheet_status == 200 else "Failed")
+    if email:
+        email_status = send_email_alert(email, "Test Alert", "This is a test alert from the system.")
+        st.sidebar.write("Email Alert: Success" if email_status == 200 else "Failed")
 
-            # Send email using a POST request to the email service API
-            response = requests.post(
-                EMAIL_API_URL,
-                json=email_data,
-                headers={"Authorization": f"Bearer {EMAIL_API_KEY}"}
-            )
-
-            if response.status_code == 200:
-                st.success("Email notification sent successfully!")
-            else:
-                st.error(f"Failed to send email: {response.text}")
-                
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
-
-if __name__ == "__main__":
-    main()
-
+st.sidebar.write("Use the mail interface to upload documents and generate insights.")
