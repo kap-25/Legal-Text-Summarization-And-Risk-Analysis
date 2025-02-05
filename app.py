@@ -67,8 +67,8 @@ def detect_risks(content):
     """
     Detects potential risks in the given text content using a text classification model.
     """
-    risk_model = pipeline("text-classification", model="distilbert-base-uncased")
-    risks = risk_model(content)
+    risk_model = pipeline("text-classification", model="distilbert-base-uncased", truncation=True)
+    risks = risk_model(content[:512])
     return risks
 
 # Detect risks in uploaded content
